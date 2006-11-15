@@ -669,11 +669,13 @@ int mainloop(CLIENT *client) {
 
 		if (request.type==NBD_CMD_DISC) {
 			msg2(LOG_INFO, "Disconnect request received.");
-			if (client->difmap) g_free(client->difmap) ;
-                	if (client->difffile>=0) { 
-                		close(client->difffile);
-				unlink(client->difffilename);
-				free(client->difffilename);
+			if(client->server->flags & F_COPYONWRITE) {
+				if (client->difmap) g_free(client->difmap) ;
+                		if (client->difffile>=0) { 
+                			close(client->difffile);
+					unlink(client->difffilename);
+					free(client->difffilename);
+				}
 			}
 			go_on=FALSE;
 			continue;

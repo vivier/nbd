@@ -979,10 +979,10 @@ int serveloop(SERVER* serve) {
 	int max_fd = serve->socket;
 	fd_set read_fds;
 
-	FD_ZERO(&read_fds);
-	FD_SET(serve->socket, &read_fds);
-
 	for(;;) {
+		FD_ZERO(&read_fds);
+		FD_SET(serve->socket, &read_fds);
+
 		DEBUG("select, ");
 		/* use to select to tell us when a connection is ready to be
 		 * accepted */

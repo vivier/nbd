@@ -307,7 +307,6 @@ int main(int argc, char *argv[]) {
 
 	negotiate(sock, &size64, &flags);
 	setsizes(nbd, size64, blocksize, flags);
-	set_timeout(nbd, timeout);
 	finish_sock(sock, nbd, swap);
 
 	/* Go daemon */
@@ -348,7 +347,6 @@ int main(int argc, char *argv[]) {
 					setsizes(nbd, size64, blocksize,
 								new_flags);
 
-					set_timeout(nbd, timeout);
 					finish_sock(sock,nbd,swap);
 				}
 			}

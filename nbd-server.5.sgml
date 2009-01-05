@@ -374,6 +374,66 @@ manpage.1: manpage.sgml
 	</listitem>
       </varlistentry>
       <varlistentry>
+	<term><option>morerandom</option></term>
+	<listitem>
+	  <para>Optional; boolean.</para>
+	  <para>
+	    Enables higher entropy random file used in password
+	    authentication, by using e.g., blocking /dev/random
+	    instead of e.g., /dev/urandom.  Usually takes too long, so
+	    leave off, unless you really want this.  Note that in
+	    CYGWIN, even /dev/random probably is buggy and insecure,
+	    too, due to Microsoft NT/XP bugs in entropy (supposedly
+	    fixed in Vista?).</para>
+	  <para>
+	    This option is not fully implemented, for non-Linux
+	    systems; it needs portability put in for systems such as
+	    Apple OS X (require EGD instead of use /dev/random which
+	    is just /dev/urandom with a different name), OpenBSD (use
+	    /dev/srandom instead of try to open the hardware
+	    /dev/random device that's probably not there), etc.
+	  </para>
+	  <para>
+	    Corresponds to the <option>-U</option> option on the
+	    command line
+	  </para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+	<term><option>seppass</option></term>
+	<listitem>
+	  <para>Optional; boolean.</para>
+	  <para>
+	    Enables separate client and server passwords.  When
+	    password authentication is being used, it takes the
+	    password you specify and cuts it in half, with the first
+	    half used for client, and the second half used for server.
+	    Make sure to use a doubly long password.
+	  </para>
+	  <para>
+	    Corresponds to the <option>-2</option> option on the
+	    command line
+	  </para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+	<term><option>password</option></term>
+	<listitem>
+	  <para>Optional; string</para>
+	    If set, requires password for client, and authenticates to
+	    client with password.  Requires client to have same
+	    password (see <command>nbd-client</command>(8)).  Since
+	    this in a conf file, go ahead and make it a monster -- the
+	    bigger the better.  Applies only to the exports specified,
+	    so be sure to set password for all exports you want it on.
+	    Check for "*** Message: Client password ok." in server
+	    output (e.g., if you have NOFORK defined in build) to
+	    verify that it is working ok, or even on in the first
+	    place; client also prints diagnostic showing password
+	    worked if one is present.
+	</listitem>
+      </varlistentry>
+      <varlistentry>
 	<term><option>timeout</option></term>
 	<listitem>
 	  <para>Optional; integer; default 0</para>

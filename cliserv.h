@@ -1,13 +1,21 @@
+#ifndef NBD_CLISERV_H
+#define NBD_CLISERV_H 1
+
 /* This header file is shared by client & server. They really have
  * something to share...
  * */
 
 /* Client/server protocol is as follows:
-   Send INIT_PASSWD
+   Password authentication if specified
+   Send NBD_HELLO
    Send 64-bit cliserv_magic
    Send 64-bit size of exported device
    Send 128 bytes of zeros (reserved for future use)
  */
+
+#include "config.h"
+
+#include "lfs.h"
 
 #include <errno.h>
 #include <string.h>
@@ -44,11 +52,14 @@ typedef unsigned long long u64;
 #define _FILE_OFFSET_BITS 64
 #endif
 
+#ifndef NBD_AUTH_C
 u64 cliserv_magic = 0x00420281861253LL;
-#define INIT_PASSWD "NBDMAGIC"
+#endif
+#define NBD_HELLO "NBDMAGIC"
 
 #define INFO(a) do { } while(0)
 
+#ifndef NBD_AUTH_C
 void setmysockopt(int sock) {
 	int size = 1;
 #if 0
@@ -66,6 +77,7 @@ void setmysockopt(int sock) {
 		 INFO("(no sockopt/3: %m)");
 #endif
 }
+#endif /* NBD_AUTH_C */
 
 #ifndef G_GNUC_NORETURN
 #if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ > 4)
@@ -74,6 +86,8 @@ void setmysockopt(int sock) {
 #define G_GNUC_NORETURN
 #endif
 #endif
+
+#ifndef NBD_AUTH_C
 
 void err(const char *s) G_GNUC_NORETURN;
 
@@ -105,14 +119,6 @@ void err(const char *s) {
 	exit(1);
 }
 
-void logging(void) {
-#ifdef ISSERVER
-	openlog(MY_NAME, LOG_PID, LOG_DAEMON);
-#endif
-	setvbuf(stdout, NULL, _IONBF, 0);
-	setvbuf(stderr, NULL, _IONBF, 0);
-}
-
 #ifdef WORDS_BIGENDIAN
 u64 ntohll(u64 a) {
 	return a;
@@ -126,8 +132,11 @@ u64 ntohll(u64 a) {
 	return ((u64) lo) << 32U | hi;
 }
 #endif
+#endif /* NBD_AUTH_C */
 #define htonll ntohll
 
 /* Flags used between the client and server */
 #define NBD_FLAG_HAS_FLAGS	(1 << 0)	/* Flags are there */
 #define NBD_FLAG_READ_ONLY	(1 << 1)	/* Device is read-only */
+
+#endif /* NBD_CLISERV_H */

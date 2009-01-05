@@ -17,12 +17,33 @@ AC_ARG_ENABLE(
   ],
   [NBD_LFS=1]
 )
+AC_ARG_ENABLE(
+  auth,
+  AC_HELP_STRING(--disable-auth,Disable Authentication via passwords (default on)),
+  [
+    if test "x$enableval" = "xyes" ; then
+      NBD_AUTH=1
+    else
+      NBD_AUTH=0
+    fi
+  ],
+  [NBD_AUTH=1]
+)
 AC_MSG_CHECKING([whether Large File Support should be enabled])
 if test $NBD_LFS -eq 1; then
   AC_DEFINE(NBD_LFS,1, [Define to 1 if Large File Support should be enabled])
   AC_MSG_RESULT([yes])
 else
   AC_DEFINE(NBD_LFS,0)
+  AC_MSG_RESULT([no])
+fi
+
+AC_MSG_CHECKING([whether password authentication should be enabled])
+if test $NBD_AUTH -eq 1; then
+  AC_DEFINE(NBD_AUTH,1, [Define to 1 if password authentication  should be enabled])
+  AC_MSG_RESULT([yes])
+else
+  AC_DEFINE(NBD_AUTH,0)
   AC_MSG_RESULT([no])
 fi
 

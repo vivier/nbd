@@ -63,6 +63,8 @@ manpage.1: manpage.sgml
       <arg><option>-r</option></arg>
       <arg><option>-m</option></arg>
       <arg><option>-c</option></arg>
+      <arg><option>-U</option></arg>
+      <arg><option>-2</option></arg>
       <arg><option>-l <replaceable>host list filename</replaceable></option></arg>
       <arg><option>-o <replaceable>section name</replaceable></option></arg>
       <arg><option>-C <replaceable>config file</replaceable></option></arg>
@@ -203,6 +205,31 @@ manpage.1: manpage.sgml
 	    warning about failure to parse the config file. If the
 	    command line contains a fully specified configuration, this
 	    warning is harmless and may be ignored.</para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+	<term><option>-U</option></term>
+	<listitem>
+	  <para>For password authentication, require stronger random
+	    entropy gathering.  See "morerandom" config file option in
+	    nbd-server(5).
+	  </para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+	<term><option>-2</option></term>
+	<listitem>
+	  <para>Separate passwords for client and server.  See "seppass"
+	    config file option in nbd-server(5).</para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+      	<term><option>timeout</option></term>
+	<listitem>
+	  <para>Maximum number of idle seconds. If a connection is
+	    inactive for this amount of time, it is terminated; this is to
+	    avoid stale nbd-server processes staying in memory. Use of
+	    this option is strongly recommended.</para>
 	</listitem>
       </varlistentry>
       <varlistentry>

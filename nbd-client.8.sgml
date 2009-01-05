@@ -58,12 +58,13 @@ manpage.1: manpage.sgml
       <arg choice=plain><option><replaceable>host</replaceable></option></arg>
       <arg choice=plain><option><replaceable>port</replaceable></option></arg>
       <arg choice=plain><option><replaceable>nbd-device</replaceable></option></arg>
-      <arg><option>-sdp</option></arg>
       <arg><option>-swap</option></arg>
       <arg><option>-persist</option></arg>
       <arg><option>-nofork</option></arg>
       <arg><option>-block-size <replaceable>block size</replaceable></option></arg>
       <arg><option>-timeout <replaceable>seconds</replaceable></option></arg>
+      <arg><option>-passfile <replaceable>password file</replaceable></option></arg>
+      <arg><option>-sdp</option></arg>
     </cmdsynopsis>
     <cmdsynopsis>
       <command>&dhpackage;</command>
@@ -100,6 +101,18 @@ manpage.1: manpage.sgml
 	<listitem>
 	  <para>Use a blocksize of "block size". Default is 1024;
 	    allowed values are either 512, 1024, 2048 or 4096</para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+	<term><option>passfile=</option></term>
+	<listitem>
+	  <para>Specifies file to read password from, which will then
+	    be required of and by both server and client to
+	    authenticate.  Must be set the same on server for this
+	    export.  nbd-client(8) prints message "server password ok"
+	    when connecting if a password is set and works; be sure
+	    that prints to make sure your passwords are activated.
+	  </para>
 	</listitem>
       </varlistentry>
       <varlistentry>

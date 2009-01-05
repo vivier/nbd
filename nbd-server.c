@@ -95,6 +95,15 @@
 /* used in cliserv.h, so must come first */
 #define MY_NAME "nbd_server"
 #include "cliserv.h"
+#include "auth.h"
+
+void logging(void) {
+#ifdef ISSERVER
+	openlog(MY_NAME, LOG_PID, LOG_DAEMON);
+#endif
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+}
 
 /** Default position of the config file */
 #ifndef SYSCONFDIR
@@ -154,6 +163,8 @@ gchar* rungroup=NULL;
 #define F_SPARSE 16	  /**< flag to tell us copyronwrite should use a sparse file */
 #define F_SDP 32	  /**< flag to tell us the export should be done using the Socket Direct Protocol for RDMA */
 #define F_SYNC 64	  /**< Whether to fsync() after a write */
+#define F_SEPPASS 128	  /**< flag to specify that the password will be cut in half, one half for the server, one half for the client */
+#define F_MORERANDOM 256  /**< flag to specify that urandom is not OK */
 GHashTable *children;
 char pidfname[256]; /**< name of our PID file */
 char pidftemplate[256]; /**< template to be used for the filename of the PID file */
@@ -178,6 +189,7 @@ typedef struct {
 	off_t expected_size; /**< size of the exported file as it was told to
 			       us through configuration */
 	gchar* listenaddr;   /**< The IP address we're listening on */
+	char* password;      /**< Password used for authenticating each other */
 	unsigned int port;   /**< port we're exporting this file at */
 	char* authname;      /**< filename of the authorization file */
 	int flags;           /**< flags associated with this exported file */
@@ -250,15 +262,29 @@ typedef struct {
  * @param opts The client who's trying to connect.
  * @return 0 - authorization refused, 1 - OK
  **/
+/* Note these macros differ from the ones in auth.c in that they
+   are named with a V to mean "value" rather than pointer, and there
+   is an & in front of that value to cause it to become a pointer */
+#define FamilyV(y)	(((struct sockaddr*)&y)->sa_family)
+#define Addr4V(y)	(((struct sockaddr_in*)&y)->sin_addr)
+#define Port4V(y)	(((struct sockaddr_in*)&y)->sin_port)
+#define Addr6V(y)	(((struct sockaddr_in6*)&y)->sin6_addr)
+#define Port6V(y)	(((struct sockaddr_in6*)&y)->sin6_port)
+
 int authorized_client(CLIENT *opts) {
 	const char *ERRMSG="Invalid entry '%s' in authfile '%s', so, refusing all connections.";
 	FILE *f ;
 	char line[LINELEN]; 
 	char *tmp;
-	struct in_addr addr;
-	struct in_addr client;
-	struct in_addr cltemp;
+	struct sockaddr_storage addr;
+	struct sockaddr_storage client;
+	struct sockaddr_storage cltemp;
+	struct sockaddr_storage mask;
+	uint32_t addrhost;
+	uint32_t clienthost;
+	uint32_t cltemphost;
 	int len;
+	int i;
 
 	if ((f=fopen(opts->server->authname,"r"))==NULL) {
 		msg4(LOG_INFO,"Can't open authorization file %s (%s).",
@@ -266,29 +292,76 @@ int authorized_client(CLIENT *opts) {
 		return 1 ; 
 	}
   
-  	inet_aton(opts->clientname, &client);
+  	if(!(inet_aton(opts->clientname, &Addr4V(client)))) {
+#ifdef AF_INET6
+		if(inet_pton(AF_INET6,opts->clientname, &(Addr6V(client)))!=1)
+			msg3(LOG_CRIT, ERRMSG, opts->clientname);
+		else FamilyV(client)=AF_INET6;
+#endif /* AF_INET6 */
+	} else FamilyV(client)=AF_INET;
 	while (fgets(line,LINELEN,f)!=NULL) {
 		if((tmp=index(line, '/'))) {
+			DEBUG3("#a auth line \"%s\", tmp \"%s\"\n", line, tmp);
 			if(strlen(line)<=tmp-line) {
 				msg4(LOG_CRIT, ERRMSG, line, opts->server->authname);
 				return 0;
 			}
+			DEBUG("here\n");
 			*(tmp++)=0;
-			if(!inet_aton(line,&addr)) {
-				msg4(LOG_CRIT, ERRMSG, line, opts->server->authname);
-				return 0;
-			}
+			DEBUG3("#b auth line \"%s\", tmp \"%s\"\n", line, tmp);
+			if(!inet_aton(line,&Addr4V(addr))==0) {
+#ifdef AF_INET6
+				if(inet_pton(AF_INET6,line,&addr)!=1) {
+					msg4(LOG_CRIT, ERRMSG, line, opts->server->authname);
+					return 0;
+				} else FamilyV(addr)=AF_INET6;
+#endif /* AF_INET6 */
+			} else FamilyV(addr)=AF_INET;
+			DEBUG("here2\n");
 			len=strtol(tmp, NULL, 0);
-			addr.s_addr>>=32-len;
-			addr.s_addr<<=32-len;
-			memcpy(&cltemp,&client,sizeof(client));
-			cltemp.s_addr>>=32-len;
-			cltemp.s_addr<<=32-len;
-			if(addr.s_addr == cltemp.s_addr) {
-				return 1;
+			DEBUG2("len %d\n",len);
+			DEBUG3("family addr %d, family client %d\n", FamilyV(client),FamilyV(addr));
+			if(FamilyV(addr)==FamilyV(client)) switch(FamilyV(addr)) {
+			    case AF_INET:
+				DEBUG3("addr %08X cltemp %08X\n",Addr4V(addr).s_addr,Addr4V(cltemp).s_addr);
+				addrhost=ntohl(Addr4V(addr).s_addr);
+				addrhost>>=32-len;
+				addrhost<<=32-len;
+				memcpy(&cltemp,&client,sizeof(client));
+				cltemphost=ntohl(Addr4V(cltemp).s_addr);
+				DEBUG3("addrhost %08X cltemphost %08X\n",addrhost,cltemphost);
+				cltemphost>>=32-len;
+				cltemphost<<=32-len;
+				DEBUG3("addrhost %08X cltemphost %08X\n",addrhost,cltemphost);
+				if(addrhost==cltemphost) return 1;
+				break;
+#ifdef AF_INET6
+			    case AF_INET6:	/* compiles ok, but untested; check byte order conv. */
+				memset(&Addr6V(mask),0,sizeof(Addr6V(mask)));
+				for(i=0;i<len/8;++i) Addr6V(mask).s6_addr[i]=0xff;
+				if(len%8) Addr6V(mask).s6_addr[i]=((0xff>>(8-len%8))<<(8-len%8));
+				memcpy(&cltemp,&client,sizeof(client));
+				for(i=0;i<16;++i) {
+					Addr6V(addr  ).s6_addr[i]&=Addr6V(mask).s6_addr[i];
+					Addr6V(cltemp).s6_addr[i]&=Addr6V(mask).s6_addr[i];
+				}
+				if(memcmp(&Addr6V(addr),&Addr6V(cltemp),sizeof(Addr6V(addr)))==0) return 1;
+				break;
+#endif /* AF_INET6 */
+			    default:
+				msg4(LOG_CRIT, "Family error for '%s': '%d'",
+					line, FamilyV(addr));
 			}
 		}
-		if (strncmp(line,opts->clientname,strlen(opts->clientname))==0) {
+		DEBUG("here3\n");
+		tmp=index(line,'\n'); if(tmp) *tmp='\0';
+		tmp=index(line,'\r'); if(tmp) *tmp='\0';
+		DEBUG2("line \"%s\"\n",line);
+		/* fixed bug it was matching "192.168.1.1" client to
+		"192.168.1.102" allowed client (either don't use
+		strncmp, or use strncmp & strlen(x)==strlen(y))
+		(strcmp is not an input function) */
+		if (strcmp(line,opts->clientname)==0) {
 			fclose(f);
 			return 1;
 		}
@@ -379,6 +452,15 @@ void dump_section(SERVER* serve, gchar* section_header) {
 	if(serve->authname) {
 		printf("\tauthfile = %s\n", serve->authname);
 	}
+	if(serve->flags & F_SEPPASS) {
+		printf("\tseppass = true\n");
+	}
+	if(serve->flags & F_MORERANDOM) {
+		printf("\tmorerandom = true\n");
+	}
+	if(serve->password) {
+		printf("\tpassword = %s\n", serve->password);
+	}
 	exit(EXIT_SUCCESS);
 }
 
@@ -415,6 +497,7 @@ SERVER* cmdline(int argc, char *argv[]) {
 	}
 	serve=g_new0(SERVER, 1);
 	serve->authname = g_strdup(default_authname);
+	serve->password = NULL;
 	serve->virtstyle=VIRT_IPLIT;
 	while((c=getopt_long(argc, argv, "-C:cl:mo:rp:", long_options, &i))>=0) {
 		switch (c) {
@@ -447,7 +530,7 @@ SERVER* cmdline(int argc, char *argv[]) {
 			case 1:
 				serve->exportname = g_strdup(optarg);
 				if(serve->exportname[0] != '/') {
-					fprintf(stderr, "E: The to be exported file needs to be an absolute filename!\n");
+					printf( "E: The to be exported file needs to be an absolute filename!\n");
 					exit(EXIT_FAILURE);
 				}
 				break;
@@ -683,7 +766,10 @@ GArray* parse_cfile(gchar* f, GError** e) {
 		{ "sparse_cow",	FALSE,	PARAM_BOOL,	NULL, F_SPARSE },
 		{ "sdp",	FALSE,	PARAM_BOOL,	NULL, F_SDP },
 		{ "sync",	FALSE,  PARAM_BOOL,	NULL, F_SYNC },
+		{ "morerandom",	FALSE,	PARAM_BOOL,	NULL, F_MORERANDOM },
+		{ "seppass",	FALSE,	PARAM_BOOL,	NULL, F_SEPPASS },
 		{ "listenaddr", FALSE,  PARAM_STRING,   NULL, 0 },
+		{ "password",	FALSE,	PARAM_STRING,   NULL, 0 },
 	};
 	const int lp_size=sizeof(lp)/sizeof(PARAM);
 	PARAM gp[] = {
@@ -703,6 +789,7 @@ GArray* parse_cfile(gchar* f, GError** e) {
 	gint i;
 	gint j;
 
+	/*DEBUG("parse_cfile\n");*/
 	errdomain = g_quark_from_string("parse_cfile");
 	cfile = g_key_file_new();
 	retval = g_array_new(FALSE, TRUE, sizeof(SERVER));
@@ -718,6 +805,8 @@ GArray* parse_cfile(gchar* f, GError** e) {
 		g_key_file_free(cfile);
 		return NULL;
 	}
+
+	/*DEBUG("before groups=\n");*/
 	groups = g_key_file_get_groups(cfile, NULL);
 	for(i=0;groups[i];i++) {
 		memset(&s, '\0', sizeof(SERVER));
@@ -730,16 +819,20 @@ GArray* parse_cfile(gchar* f, GError** e) {
 		lp[6].target=&(s.postrun);
 		lp[7].target=lp[8].target=lp[9].target=
 				lp[10].target=lp[11].target=
-				lp[12].target=&(s.flags);
-		lp[13].target=&(s.listenaddr);
+				lp[12].target=lp[13].target=&(s.flags);
+		lp[14].target=&(s.listenaddr);
+		lp[15].target=&(s.password);
 
 		/* After the [generic] group, start parsing exports */
 		if(i==1) {
 			p=lp;
 			p_size=lp_size;
-		} 
+		}
+		/*DEBUG2("p_size %d\n",p_size);*/
 		for(j=0;j<p_size;j++) {
+			/*DEBUG4("before assert %d %u %s\n",j,p[j].ptype,p[j].target);*/
 			g_assert(p[j].target != NULL);
+			/*DEBUG3("after assert %d %u\n",j,p[j].ptype);*/
 			g_assert(p[j].ptype==PARAM_INT||p[j].ptype==PARAM_STRING||p[j].ptype==PARAM_BOOL);
 			switch(p[j].ptype) {
 				case PARAM_INT:
@@ -1195,22 +1288,36 @@ void negotiate(CLIENT *client) {
 	u64 size_host;
 	u32 flags = NBD_FLAG_HAS_FLAGS;
 
+	if (client->server->password) {
+#ifdef NBD_AUTH
+		nbd_auth(client->net,client->server->password,
+			!!(client->server->flags&F_SEPPASS),
+			!!(client->server->flags&F_MORERANDOM),
+			NBD_WHO_SERVER);
+		msg2(LOG_INFO,"Client password ok.");
+	}
+#else /* NBD_AUTH */
+	{
+		printf( "nbd-server doesn't have auth compiled in.\n");
+		exit(70);
+	}
+#endif /* NBD_AUTH */
+	if (write(client->net, NBD_HELLO, 8) < 0)
+		err("Negotiation failed 5: %m");
 	memset(zeros, '\0', sizeof(zeros));
-	if (write(client->net, INIT_PASSWD, 8) < 0)
-		err("Negotiation failed: %m");
 	cliserv_magic = htonll(cliserv_magic);
 	if (write(client->net, &cliserv_magic, sizeof(cliserv_magic)) < 0)
-		err("Negotiation failed: %m");
+		err("Negotiation failed 6: %m");
 	size_host = htonll((u64)(client->exportsize));
 	if (write(client->net, &size_host, 8) < 0)
-		err("Negotiation failed: %m");
+		err("Negotiation failed 7: %m");
 	if (client->server->flags & F_READONLY)
 		flags |= NBD_FLAG_READ_ONLY;
 	flags = htonl(flags);
 	if (write(client->net, &flags, 4) < 0)
-		err("Negotiation failed: %m");
+		err("Negotiation failed 8: %m");
 	if (write(client->net, zeros, 124) < 0)
-		err("Negotiation failed: %m");
+		err("Negotiation failed 9: %m");
 }
 
 /** sending macro. */
@@ -1263,7 +1370,7 @@ int mainloop(CLIENT *client) {
 		len = ntohl(request.len);
 
 		if (request.magic != htonl(NBD_REQUEST_MAGIC))
-			err("Not enough magic.");
+			err("Not enough magic.  Check if need passwords.");
 		if (len > BUFSIZE + sizeof(struct nbd_reply))
 			err("Request too big!");
 #ifdef DODBG
@@ -1617,11 +1724,11 @@ int serveloop(GArray* servers) {
 					client->net=net;
 					set_peername(net, client);
 					if (!authorized_client(client)) {
-						msg2(LOG_INFO,"Unauthorized client") ;
+						msg2(LOG_INFO,"Unauthorized client address") ;
 						close(net);
 						continue;
 					}
-					msg2(LOG_INFO,"Authorized client") ;
+					msg2(LOG_INFO,"Authorized client address") ;
 					pid=g_malloc(sizeof(pid_t));
 #ifndef NOFORK
 					if ((*pid=fork())<0) {
@@ -1790,7 +1897,7 @@ void daemonize(SERVER* serve) {
 		fclose(pidf);
 	} else {
 		perror("fopen");
-		fprintf(stderr, "Not fatal; continuing");
+		printf( "Not fatal; continuing");
 	}
 }
 #else
@@ -1879,7 +1986,7 @@ int main(int argc, char *argv[]) {
 	GError *err=NULL;
 
 	if (sizeof( struct nbd_request )!=28) {
-		fprintf(stderr,"Bad size of structure. Alignment problems?\n");
+		printf("Bad size of structure. Alignment problems?\n");
 		exit(EXIT_FAILURE) ;
 	}
 

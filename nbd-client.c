@@ -8,7 +8,7 @@
  * Version 1.1 - added bs (blocksize) option (Alexey Guzeev, aga@permonline.ru)
  * Version 1.2 - I added new option '-d' to send the disconnect request
  * Version 2.0 - Version synchronised with server
- * Version 2.1 - Check for disconnection before INIT_PASSWD is received
+ * Version 2.1 - Check for disconnection before NBD_HELLO is received
  * 	to make errormsg a bit more helpful in case the server can't
  * 	open the exported file.
  * 16/03/2010 - Add IPv6 support.
@@ -35,6 +35,10 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <getopt.h>
+#include <termios.h>
+#include <sys/stat.h>
+
+#include "auth.h"
 
 #ifndef __GNUC__
 #error I need GCC to work
@@ -43,6 +47,19 @@
 #include <linux/ioctl.h>
 #define MY_NAME "nbd_client"
 #include "cliserv.h"
+
+void logging(void) {
+#ifdef ISSERVER
+	openlog(MY_NAME, LOG_PID, LOG_DAEMON);
+#endif
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+}
+
+static int seppass=0;
+static int morerandom=0;
+static int pass_set=0;
+static char *passwd;
 
 int check_conn(char* devname, int do_print) {
 	char buf[256];
@@ -127,21 +144,25 @@ int opennet(char *name, int port, int sdp) {
 
 void negotiate(int sock, u64 *rsize64, u32 *flags) {
 	u64 magic, size64;
-	char buf[256] = "\0\0\0\0\0\0\0\0\0";
+#define NBD_NEGOT_BUFSZ (256)
+	char buf[NBD_NEGOT_BUFSZ];
 
 	printf("Negotiation: ");
+
+	if (pass_set)
+		nbd_auth(sock,passwd,NBD_WHO_CLIENT);
 	if (read(sock, buf, 8) < 0)
 		err("Failed/1: %m");
 	if (strlen(buf)==0)
 		err("Server closed connection");
-	if (strcmp(buf, INIT_PASSWD))
-		err("INIT_PASSWD bad");
+	if (strncmp(buf, NBD_HELLO, 8))
+		err("NBD_HELLO bad; Check if need passwords.");
 	printf(".");
 	if (read(sock, &magic, sizeof(magic)) < 0)
 		err("Failed/2: %m");
 	magic = ntohll(magic);
 	if (magic != cliserv_magic)
-		err("Not enough cliserv_magic");
+		err("bad magic");
 	printf(".");
 
 	if (read(sock, &size64, sizeof(size64)) < 0)
@@ -171,6 +192,42 @@ void negotiate(int sock, u64 *rsize64, u32 *flags) {
 	printf("\n");
 
 	*rsize64 = size64;
+}
+
+bool askpass() {
+	struct termios tios_dat;
+	struct termios tios_datmod;
+	char is_a_tty;
+
+	is_a_tty=isatty(0);
+	if(is_a_tty) {
+		if(tcgetattr(0,&tios_dat)) perror("tcgetattr");
+		memcpy(&tios_datmod,&tios_dat,
+			sizeof(tios_datmod));
+		tios_datmod.c_lflag&=~ECHO;
+		if(tcsetattr(0,TCSANOW,&tios_datmod))
+			perror("tcsetattr");
+		fprintf(stdout,"enter password:");
+	}
+
+	/* todo: make this a better read routine */
+	if(!(passwd=malloc(0x1000))) err("Malloc: %m");
+	memset(passwd,0,0x1000);
+	fgets(passwd,0x1000,stdin);
+
+	if(is_a_tty) {
+		/* Not sure TCSANOW vs. TCSADRAIN, since we
+		already have it and it's input related too */
+		if(tcsetattr(0,TCSANOW,&tios_dat))
+			perror("tcsetattr 2: %m");
+		fputs("\n",stdout);
+	}
+
+	/* remove auth size limit by doing malloc of file? */
+	if(passwd[strlen(passwd)-1]=='\n')
+		passwd[strlen(passwd)-1]='\0';
+	realloc(passwd, strlen(passwd)+1);
+	pass_set=1;
 }
 
 void setsizes(int nbd, u64 size64, int blocksize, u32 flags) {
@@ -227,7 +284,7 @@ void finish_sock(int sock, int nbd, int swap) {
 
 void usage(void) {
 	fprintf(stderr, "nbd-client version %s\n", PACKAGE_VERSION);
-	fprintf(stderr, "Usage: nbd-client host port nbd_device [-block-size|-b block size] [-timeout|-t timeout] [-swap|-s] [-sdp|-S] [-persist|-p] [-nofork|-n]\n");
+	fprintf(stderr, "Usage: nbd-client host port nbd_device [-block-size|-b block size] [-timeout|-t timeout] [-swap|-s] [-sdp|-S] [-persist|-p] [-nofork|-n] [-passfile|-P]\n");
 	fprintf(stderr, "Or   : nbd-client -d nbd_device\n");
 	fprintf(stderr, "Or   : nbd-client -c nbd_device\n");
 	fprintf(stderr, "Or   : nbd-client -h|--help\n");
@@ -235,6 +292,32 @@ void usage(void) {
 	fprintf(stderr, "Allowed values for blocksize are 512,1024,2048,4096\n"); /* will be checked in kernel :) */
 	fprintf(stderr, "Note, that kernel 2.4.2 and older ones do not work correctly with\n");
 	fprintf(stderr, "blocksizes other than 1024 without patches\n");
+}
+
+char* read_password(char* fname) {
+	int f;
+	int i;
+	int r;
+	struct stat sb;
+	char* passwd;
+
+	if((f=open(fname,O_RDONLY)) < 0)
+		err("open passfile: %m");
+	if(fstat(f,&sb) < 0)
+		err("stat passfile: %m");
+	if(!(passwd=malloc(sb.st_size+1)))
+		err("malloc for passfile: %m");
+	for(i=0;i<sb.st_size;i+=r) {
+		r=read(f,passwd+i,sb.st_size-i);
+		if(r==-1) err("read passfile: %m");
+	}
+	if(-1==close(f)) perror("close passfile");
+	passwd[sb.st_size]='\0';
+		if(sb.st_size) {
+		if(passwd[sb.st_size-1]=='\n')
+		passwd[sb.st_size-1]='\0';
+	} else fprintf(stderr, "Warning:  using empty password.\n");
+	return passwd;
 }
 
 void disconnect(char* device) {
@@ -275,11 +358,13 @@ int main(int argc, char *argv[]) {
 	int c;
 	int nonspecial=0;
 	struct option long_options[] = {
+		{ "askpass", no_argument, NULL, 'a' },
 		{ "block-size", required_argument, NULL, 'b' },
 		{ "check", required_argument, NULL, 'c' },
 		{ "disconnect", required_argument, NULL, 'd' },
 		{ "help", no_argument, NULL, 'h' },
 		{ "nofork", no_argument, NULL, 'n' },
+		{ "passfile", required_argument, NULL, 'P' },
 		{ "persist", no_argument, NULL, 'p' },
 		{ "sdp", no_argument, NULL, 'S' },
 		{ "swap", no_argument, NULL, 's' },
@@ -326,6 +411,9 @@ int main(int argc, char *argv[]) {
 					exit(EXIT_FAILURE);
 			}
 			break;
+		case 'a':
+			askpass();
+			break;
 		case 'b':
 		      blocksize:
 			blocksize=(int)strtol(optarg, NULL, 0);
@@ -344,6 +432,9 @@ int main(int argc, char *argv[]) {
 			break;
 		case 'p':
 			cont=1;
+			break;
+		case 'P':
+			passwd=read_passfile(optarg);
 			break;
 		case 's':
 			swap=1;
@@ -365,12 +456,12 @@ int main(int argc, char *argv[]) {
 		usage();
 		exit(EXIT_FAILURE);
 	}
-
+	
 	nbd = open(nbddev, O_RDWR);
 	if (nbd < 0)
 	  err("Cannot open NBD: %m\nPlease ensure the 'nbd' module is loaded.");
-	++argv; --argc; /* skip device */
 
+	if(argc) goto errmsg;
 	sock = opennet(hostname, port, sdp);
 
 	negotiate(sock, &size64, &flags);

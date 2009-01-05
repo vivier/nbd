@@ -43,7 +43,7 @@ const static int errstr_len=1024;
 typedef enum {
 	CONNECTION_TYPE_NONE,
 	CONNECTION_TYPE_CONNECT,
-	CONNECTION_TYPE_INIT_PASSWD,
+	CONNECTION_TYPE_NBD_HELLO,
 	CONNECTION_TYPE_CLISERV,
 	CONNECTION_TYPE_FULL,
 } CONNECTION_TYPE;
@@ -95,10 +95,10 @@ int setup_connection(gchar *hostname, int port, CONNECTION_TYPE ctype) {
 		strncpy(errstr, strerror(errno), errstr_len);
 		goto err_open;
 	}
-	if(ctype<CONNECTION_TYPE_INIT_PASSWD)
+	if(ctype<CONNECTION_TYPE_NBD_HELLO)
 		goto end;
-	if(read_all(sock, buf, strlen(INIT_PASSWD))<0) {
-		snprintf(errstr, errstr_len, "Could not read INIT_PASSWD: %s",
+	if(read_all(sock, buf, strlen(NBD_HELLO))<0) {
+		snprintf(errstr, errstr_len, "Could not read NBD_HELLO: %s",
 				strerror(errno));
 		goto err_open;
 	}
@@ -106,8 +106,8 @@ int setup_connection(gchar *hostname, int port, CONNECTION_TYPE ctype) {
 		snprintf(errstr, errstr_len, "Server closed connection");
 		goto err_open;
 	}
-	if(strncmp(buf, INIT_PASSWD, strlen(INIT_PASSWD))) {
-		snprintf(errstr, errstr_len, "INIT_PASSWD does not match");
+	if(strncmp(buf, NBD_HELLO, strlen(NBD_HELLO))) {
+		snprintf(errstr, errstr_len, "NBD_HELLO does not match");
 		goto err_open;
 	}
 	if(ctype<CONNECTION_TYPE_CLISERV)

@@ -94,8 +94,8 @@
 
 /* used in cliserv.h, so must come first */
 #define MY_NAME "nbd_server"
-#include "cliserv.h"
-#include "auth.h"
+#include <cliserv.h>
+#include <auth.h>
 
 void logging(void) {
 #ifdef ISSERVER
@@ -281,7 +281,6 @@ int authorized_client(CLIENT *opts) {
 	struct sockaddr_storage cltemp;
 	struct sockaddr_storage mask;
 	uint32_t addrhost;
-	uint32_t clienthost;
 	uint32_t cltemphost;
 	int len;
 	int i;
@@ -1286,6 +1285,7 @@ int expwrite(off_t a, char *buf, size_t len, CLIENT *client) {
 void negotiate(CLIENT *client) {
 	char zeros[128];
 	u64 size_host;
+	u64 magic;
 	u32 flags = NBD_FLAG_HAS_FLAGS;
 
 	if (client->server->password) {
@@ -1305,8 +1305,8 @@ void negotiate(CLIENT *client) {
 	if (write(client->net, NBD_HELLO, 8) < 0)
 		err("Negotiation failed 5: %m");
 	memset(zeros, '\0', sizeof(zeros));
-	cliserv_magic = htonll(cliserv_magic);
-	if (write(client->net, &cliserv_magic, sizeof(cliserv_magic)) < 0)
+	magic = htonll(cliserv_magic);
+	if (write(client->net, &magic, sizeof(magic)) < 0)
 		err("Negotiation failed 6: %m");
 	size_host = htonll((u64)(client->exportsize));
 	if (write(client->net, &size_host, 8) < 0)

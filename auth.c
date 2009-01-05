@@ -6,11 +6,12 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <ctype.h>
-#include "config.h"
+#include <config.h>
 #define NBD_AUTH_C 1	/* for cliserv.h */
-#include "cliserv.h"
-#include "auth.h"
-#include "sha2.h"
+#include <cliserv.h>
+#include <auth.h>
+#include <sha2.h>
+#include <unistd.h>
 
 #ifdef NBD_AUTH
 
@@ -219,24 +220,28 @@ sendrandom:
 	if(close(f)==-1) err("close rand: %m");
 	if(morerandom) fprintf(stderr, " Done.\n");
 
-	if (write(sock, hashdat, (size_t)NBD_AUTHSZ) < 0)
-		if(who==NBD_WHO_SERVER)
+	if (write(sock, hashdat, (size_t)NBD_AUTHSZ) < 0) {
+		if(who==NBD_WHO_SERVER) {
 			err("auth write send: %m");
-		else
+		} else {
 			err("auth write send: %m; Check if nbd-server doesn't have passwords.");
+		}
+	}
 
 	nbd_authhash(mydigest, hashdat, commonhashlen,
 	    (who==NBD_WHO_SERVER)?clientpass:serverpass,
 	    (who==NBD_WHO_SERVER)?clientpasslen:serverpasslen);
 
 	if(read(sock, (unsigned char*)theirdigest,
-	    (size_t)SHA512_DIGEST_LENGTH)!=SHA512_DIGEST_LENGTH)
-		if (who==NBD_WHO_SERVER)
+	    (size_t)SHA512_DIGEST_LENGTH)!=SHA512_DIGEST_LENGTH) {
+		if (who==NBD_WHO_SERVER) {
 			err("Auth read back: %m\n\
 Check if nbd-client failed to set its passwords right.");
-		else
+		} else {
 			err("Auth read back: %m\n\
 Check your passwords and make sure they are the same here & nbd-server");
+		}
+	}
 	if(memcmp(mydigest,theirdigest,(size_t)SHA512_DIGEST_LENGTH)) {
 		err("Bad password!");
 		exit(59);			/* just to be sure */

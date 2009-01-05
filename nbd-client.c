@@ -38,7 +38,7 @@
 #include <termios.h>
 #include <sys/stat.h>
 
-#include "auth.h"
+#include <auth.h>
 
 #ifndef __GNUC__
 #error I need GCC to work
@@ -46,7 +46,7 @@
 
 #include <linux/ioctl.h>
 #define MY_NAME "nbd_client"
-#include "cliserv.h"
+#include <cliserv.h>
 
 void logging(void) {
 #ifdef ISSERVER

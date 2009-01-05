@@ -52,33 +52,12 @@ typedef unsigned long long u64;
 #define _FILE_OFFSET_BITS 64
 #endif
 
-#ifndef NBD_AUTH_C
-u64 cliserv_magic = 0x00420281861253LL;
-#endif
+#define cliserv_magic 0x00420281861253LL
 #define NBD_HELLO "NBDMAGIC"
 
 #define INFO(a) do { } while(0)
 
-#ifndef NBD_AUTH_C
-void setmysockopt(int sock) {
-	int size = 1;
-#if 0
-	if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &size, sizeof(int)) < 0)
-		 INFO("(no sockopt/1: %m)");
-#endif
-#ifdef	IPPROTO_TCP
-	size = 1;
-	if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &size, sizeof(int)) < 0)
-		 INFO("(no sockopt/2: %m)");
-#endif
-#if 0
-	size = 1024;
-	if (setsockopt(sock, IPPROTO_TCP, TCP_MAXSEG, &size, sizeof(int)) < 0)
-		 INFO("(no sockopt/3: %m)");
-#endif
-}
-#endif /* NBD_AUTH_C */
-
+void setmysockopt(int sock);
 #ifndef G_GNUC_NORETURN
 #if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ > 4)
 #define G_GNUC_NORETURN __attribute__((__noreturn__))
@@ -87,52 +66,10 @@ void setmysockopt(int sock) {
 #endif
 #endif
 
-#ifndef NBD_AUTH_C
-
 void err(const char *s) G_GNUC_NORETURN;
 
-void err(const char *s) {
-	const int maxlen = 150;
-	char s1[maxlen], *s2;
-
-	strncpy(s1, s, maxlen);
-	if ((s2 = strstr(s, "%m"))) {
-		strcpy(s1 + (s2 - s), strerror(errno));
-		s2 += 2;
-		strcpy(s1 + strlen(s1), s2);
-	}
-#ifndef	sun
-	/* Solaris doesn't have %h in syslog */
-	else if ((s2 = strstr(s, "%h"))) {
-		strcpy(s1 + (s2 - s), hstrerror(h_errno));
-		s2 += 2;
-		strcpy(s1 + strlen(s1), s2);
-	}
-#endif
-
-	s1[maxlen-1] = '\0';
-#ifdef ISSERVER
-	syslog(LOG_ERR, "%s", s1);
-	syslog(LOG_ERR, "Exiting.");
-#endif
-	fprintf(stderr, "Error: %s\nExiting.\n", s1);
-	exit(1);
-}
-
-#ifdef WORDS_BIGENDIAN
-u64 ntohll(u64 a) {
-	return a;
-}
-#else
-u64 ntohll(u64 a) {
-	u32 lo = a & 0xffffffff;
-	u32 hi = a >> 32U;
-	lo = ntohl(lo);
-	hi = ntohl(hi);
-	return ((u64) lo) << 32U | hi;
-}
-#endif
 #endif /* NBD_AUTH_C */
+u64 ntohll(u64 a);
 #define htonll ntohll
 
 /* Flags used between the client and server */

@@ -1187,6 +1187,7 @@ int mainloop(CLIENT *client) {
 		/* READ */
 
 		DEBUG("exp->buf, ");
+		memcpy(buf, &reply, sizeof(struct nbd_reply));
 		writeit(client->net, buf, sizeof(struct nbd_reply));
 		if (expread(request.from, len, client)) {
 			DEBUG("Read failed: %m");

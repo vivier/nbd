@@ -1339,6 +1339,8 @@ void serveconnection(CLIENT *client) {
 
 	setmysockopt(client->net);
 
+	backend_setup(client->net);
+
 	mainloop(client);
 	do_run(client->server->postrun, client->exportname);
 }

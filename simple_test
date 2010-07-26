@@ -81,8 +81,8 @@ then
 else
 	kill $PID
 fi
+rm -f $tmpnam nbd-server.conf
 if [ $retval -ne 0 ]
 then
 	exit $retval
 fi
-rm -f $tmpnam nbd-server.conf

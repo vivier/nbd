@@ -177,24 +177,16 @@ void nbd_auth(int sock, char *clientpass, who_am_i who) {
 	uint8_t mydigest[SHA512_DIGEST_LENGTH];
 	uint8_t	theirdigest[SHA512_DIGEST_LENGTH];
 	char *rand;
-	char *serverpass=clientpass;
-	size_t clientpasslen;
-	size_t serverpasslen;
+	size_t passlen;
 	size_t commonhashlen;
 	unsigned char hashdat[NBD_AUTHSZ+HOSTNUMS_SPACESZ];
 
 	/* hash in order:  random, identity, password */
 	commonhashlen=NBD_AUTHSZ+socktonumbers(sock,hashdat+NBD_AUTHSZ,who);
 
-	serverpasslen=clientpasslen=strlen(clientpass);
-	if(seppass) {		/* be sure to use a very big clientpass */
-		serverpasslen -= (clientpasslen /= 2);
-		serverpass    +=  clientpasslen;
-	}
+	passlen=strlen(clientpass);
 
 	DEBUG2("Debug password(s):  \"%s\"\n", clientpass);
-	DEBUG4("%ssing separate passwords: clientpasslen %u, serverpasslen %u\n",
-		(seppass?"U":"Not u"), clientpasslen, serverpasslen);
 
 	if(who==NBD_WHO_CLIENT) goto getrandom;
 
@@ -203,11 +195,7 @@ sendrandom:
 	ips & ports & password, both digest, get back from other and
 	compare. */
 
-	if(morerandom)	{
-		rand="/dev/random";	/* Flag for strong random */
-		fprintf(stderr,
-			"Reading from %s; this can take a while", rand);
-	} else	rand="/dev/urandom";
+	rand="/dev/urandom";
 	if((f=open(rand,O_RDONLY))==-1) { err("open rand: %m"); exit(54); }
 	i=0; readloop:
 	r=read(f,hashdat+i,NBD_AUTHSZ-i);
@@ -218,7 +206,6 @@ sendrandom:
 		goto readloop;
 	}
 	if(close(f)==-1) err("close rand: %m");
-	if(morerandom) fprintf(stderr, " Done.\n");
 
 	if (write(sock, hashdat, (size_t)NBD_AUTHSZ) < 0) {
 		if(who==NBD_WHO_SERVER) {
@@ -228,9 +215,7 @@ sendrandom:
 		}
 	}
 
-	nbd_authhash(mydigest, hashdat, commonhashlen,
-	    (who==NBD_WHO_SERVER)?clientpass:serverpass,
-	    (who==NBD_WHO_SERVER)?clientpasslen:serverpasslen);
+	nbd_authhash(mydigest, hashdat, commonhashlen, clientpass, passlen);
 
 	if(read(sock, (unsigned char*)theirdigest,
 	    (size_t)SHA512_DIGEST_LENGTH)!=SHA512_DIGEST_LENGTH) {
@@ -259,9 +244,7 @@ getrandom:
 	if (read(sock, hashdat, (size_t)NBD_AUTHSZ) < 0)
 		err("Auth read get: %m");
 
-	nbd_authhash(mydigest, hashdat, commonhashlen,
-		(who==NBD_WHO_CLIENT)?clientpass:serverpass,
-		(who==NBD_WHO_CLIENT)?clientpasslen:serverpasslen);
+	nbd_authhash(mydigest, hashdat, commonhashlen, clientpass, passlen);
 
 	if(write(sock, (unsigned char*)mydigest, (size_t)SHA512_DIGEST_LENGTH)
 	   !=SHA512_DIGEST_LENGTH) err("Auth write back: %m");

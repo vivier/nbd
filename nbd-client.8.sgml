@@ -64,6 +64,7 @@ manpage.1: manpage.sgml
       <arg><option>-block-size <replaceable>block size</replaceable></option></arg>
       <arg><option>-timeout <replaceable>seconds</replaceable></option></arg>
       <arg><option>-passfile <replaceable>password file</replaceable></option></arg>
+      <arg><option>-askpass</option></arg>
       <arg><option>-sdp</option></arg>
     </cmdsynopsis>
     <cmdsynopsis>
@@ -104,7 +105,7 @@ manpage.1: manpage.sgml
 	</listitem>
       </varlistentry>
       <varlistentry>
-	<term><option>passfile=</option></term>
+	<term><option>-passfile <replaceable>password file</replaceable></option></term>
 	<listitem>
 	  <para>Specifies file to read password from, which will then
 	    be required of and by both server and client to
@@ -112,6 +113,14 @@ manpage.1: manpage.sgml
 	    export.  nbd-client(8) prints message "server password ok"
 	    when connecting if a password is set and works; be sure
 	    that prints to make sure your passwords are activated.
+	  </para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+        <listitem>
+	  <term><option>-askpass</option></term>
+	  <para>Same as above, but reads password from stdin instead. Works
+	    only if stdin is a terminal.
 	  </para>
 	</listitem>
       </varlistentry>

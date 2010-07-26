@@ -68,9 +68,10 @@ void setmysockopt(int sock);
 
 void err(const char *s) G_GNUC_NORETURN;
 
-#endif /* NBD_AUTH_C */
 u64 ntohll(u64 a);
 #define htonll ntohll
+
+void logging(char*);
 
 /* Flags used between the client and server */
 #define NBD_FLAG_HAS_FLAGS	(1 << 0)	/* Flags are there */

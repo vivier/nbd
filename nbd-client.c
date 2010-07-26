@@ -45,19 +45,8 @@
 #endif
 
 #include <linux/ioctl.h>
-#define MY_NAME "nbd_client"
 #include <cliserv.h>
 
-void logging(void) {
-#ifdef ISSERVER
-	openlog(MY_NAME, LOG_PID, LOG_DAEMON);
-#endif
-	setvbuf(stdout, NULL, _IONBF, 0);
-	setvbuf(stderr, NULL, _IONBF, 0);
-}
-
-static int seppass=0;
-static int morerandom=0;
 static int pass_set=0;
 static char *passwd;
 
@@ -194,7 +183,7 @@ void negotiate(int sock, u64 *rsize64, u32 *flags) {
 	*rsize64 = size64;
 }
 
-bool askpass() {
+void askpass(void) {
 	struct termios tios_dat;
 	struct termios tios_datmod;
 	char is_a_tty;
@@ -226,7 +215,7 @@ bool askpass() {
 	/* remove auth size limit by doing malloc of file? */
 	if(passwd[strlen(passwd)-1]=='\n')
 		passwd[strlen(passwd)-1]='\0';
-	realloc(passwd, strlen(passwd)+1);
+	passwd=realloc(passwd, strlen(passwd)+1);
 	pass_set=1;
 }
 
@@ -284,7 +273,7 @@ void finish_sock(int sock, int nbd, int swap) {
 
 void usage(void) {
 	fprintf(stderr, "nbd-client version %s\n", PACKAGE_VERSION);
-	fprintf(stderr, "Usage: nbd-client host port nbd_device [-block-size|-b block size] [-timeout|-t timeout] [-swap|-s] [-sdp|-S] [-persist|-p] [-nofork|-n] [-passfile|-P]\n");
+	fprintf(stderr, "Usage: nbd-client host port nbd_device [-block-size|-b block size] [-timeout|-t timeout] [-swap|-s] [-sdp|-S] [-persist|-p] [-nofork|-n] [-askpass|-a] [-passfile|-P]\n");
 	fprintf(stderr, "Or   : nbd-client -d nbd_device\n");
 	fprintf(stderr, "Or   : nbd-client -c nbd_device\n");
 	fprintf(stderr, "Or   : nbd-client -h|--help\n");
@@ -294,7 +283,7 @@ void usage(void) {
 	fprintf(stderr, "blocksizes other than 1024 without patches\n");
 }
 
-char* read_password(char* fname) {
+char* read_passfile(char* fname) {
 	int f;
 	int i;
 	int r;
@@ -372,7 +361,7 @@ int main(int argc, char *argv[]) {
 		{ 0, 0, 0, 0 }, 
 	};
 
-	logging();
+	logging("nbd-client");
 
 	while((c=getopt_long_only(argc, argv, "-b:c:d:hnpSst:", long_options, NULL))>=0) {
 		switch(c) {
@@ -461,7 +450,6 @@ int main(int argc, char *argv[]) {
 	if (nbd < 0)
 	  err("Cannot open NBD: %m\nPlease ensure the 'nbd' module is loaded.");
 
-	if(argc) goto errmsg;
 	sock = opennet(hostname, port, sdp);
 
 	negotiate(sock, &size64, &flags);

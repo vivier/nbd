@@ -5,4 +5,4 @@ typedef enum {
 } who_am_i;
 #define NBD_WHO_SERVER (0)
 #define NBD_WHO_CLIENT (1)
-void nbd_auth(int sock, char *password, char twopasswd, char morerandom, char who);
+void nbd_auth(int sock, char *password, who_am_i who);

@@ -1,5 +1,6 @@
 #include <cliserv.h>
 #include <stdio.h>
+#include <syslog.h>
 
 void setmysockopt(int sock) {
 #ifdef IPPROTO_TCP
@@ -49,4 +50,13 @@ u64 ntohll(u64 a) {
 	hi = ntohl(hi);
 	return ((u64) lo) << 32U | hi;
 }
+
+void logging(char* my_name) {
+#ifdef ISSERVER
+	openlog(my_name, LOG_PID, LOG_DAEMON);
+#endif
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+}
+
 #endif

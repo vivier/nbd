@@ -93,17 +93,8 @@
 #include <glib.h>
 
 /* used in cliserv.h, so must come first */
-#define MY_NAME "nbd_server"
 #include <cliserv.h>
 #include <auth.h>
-
-void logging(void) {
-#ifdef ISSERVER
-	openlog(MY_NAME, LOG_PID, LOG_DAEMON);
-#endif
-	setvbuf(stdout, NULL, _IONBF, 0);
-	setvbuf(stderr, NULL, _IONBF, 0);
-}
 
 /** Default position of the config file */
 #ifndef SYSCONFDIR
@@ -765,8 +756,6 @@ GArray* parse_cfile(gchar* f, GError** e) {
 		{ "sparse_cow",	FALSE,	PARAM_BOOL,	NULL, F_SPARSE },
 		{ "sdp",	FALSE,	PARAM_BOOL,	NULL, F_SDP },
 		{ "sync",	FALSE,  PARAM_BOOL,	NULL, F_SYNC },
-		{ "morerandom",	FALSE,	PARAM_BOOL,	NULL, F_MORERANDOM },
-		{ "seppass",	FALSE,	PARAM_BOOL,	NULL, F_SEPPASS },
 		{ "listenaddr", FALSE,  PARAM_STRING,   NULL, 0 },
 		{ "password",	FALSE,	PARAM_STRING,   NULL, 0 },
 	};
@@ -818,9 +807,9 @@ GArray* parse_cfile(gchar* f, GError** e) {
 		lp[6].target=&(s.postrun);
 		lp[7].target=lp[8].target=lp[9].target=
 				lp[10].target=lp[11].target=
-				lp[12].target=lp[13].target=&(s.flags);
-		lp[14].target=&(s.listenaddr);
-		lp[15].target=&(s.password);
+				lp[12].target=&(s.flags);
+		lp[13].target=&(s.listenaddr);
+		lp[14].target=&(s.password);
 
 		/* After the [generic] group, start parsing exports */
 		if(i==1) {
@@ -1289,19 +1278,10 @@ void negotiate(CLIENT *client) {
 	u32 flags = NBD_FLAG_HAS_FLAGS;
 
 	if (client->server->password) {
-#ifdef NBD_AUTH
 		nbd_auth(client->net,client->server->password,
-			!!(client->server->flags&F_SEPPASS),
-			!!(client->server->flags&F_MORERANDOM),
 			NBD_WHO_SERVER);
 		msg2(LOG_INFO,"Client password ok.");
 	}
-#else /* NBD_AUTH */
-	{
-		printf( "nbd-server doesn't have auth compiled in.\n");
-		exit(70);
-	}
-#endif /* NBD_AUTH */
 	if (write(client->net, NBD_HELLO, 8) < 0)
 		err("Negotiation failed 5: %m");
 	memset(zeros, '\0', sizeof(zeros));
@@ -1992,7 +1972,7 @@ int main(int argc, char *argv[]) {
 
 	memset(pidftemplate, '\0', 256);
 
-	logging();
+	logging("nbd-server");
 	config_file_pos = g_strdup(CFILE);
 	serve=cmdline(argc, argv);
 	servers = parse_cfile(config_file_pos, &err);

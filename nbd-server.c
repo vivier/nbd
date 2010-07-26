@@ -656,6 +656,9 @@ SERVER* dup_serve(SERVER *s) {
 
 	if (s->postrun)
 		serve->postrun = g_strdup(s->postrun);
+	
+	if (s->password)
+		serve->password = g_strdup(s->password);
 
 	return serve;
 }

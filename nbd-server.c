@@ -94,7 +94,8 @@
 
 /* used in cliserv.h, so must come first */
 #define MY_NAME "nbd_server"
-#include "cliserv.h"
+#include "libnbd.h"
+#include "nbd-log.h"
 
 #ifdef WITH_SDP
 #include <sdp_inet.h>
@@ -143,23 +144,6 @@ gboolean do_oldstyle=FALSE;
 #ifndef PACKAGE_VERSION
 #define PACKAGE_VERSION ""
 #endif
-/**
- * The highest value a variable of type off_t can reach. This is a signed
- * integer, so set all bits except for the leftmost one.
- **/
-#define OFFT_MAX ~((off_t)1<<(sizeof(off_t)*8-1))
-#define LINELEN 256	  /**< Size of static buffer used to read the
-			       authorization file (yuck) */
-#define BUFSIZE (1024*1024) /**< Size of buffer that can hold requests */
-#define DIFFPAGESIZE 4096 /**< diff file uses those chunks */
-#define F_READONLY 1      /**< flag to tell us a file is readonly */
-#define F_MULTIFILE 2	  /**< flag to tell us a file is exported using -m */
-#define F_COPYONWRITE 4	  /**< flag to tell us a file is exported using
-			    copyonwrite */
-#define F_AUTOREADONLY 8  /**< flag to tell us a file is set to autoreadonly */
-#define F_SPARSE 16	  /**< flag to tell us copyronwrite should use a sparse file */
-#define F_SDP 32	  /**< flag to tell us the export should be done using the Socket Direct Protocol for RDMA */
-#define F_SYNC 64	  /**< Whether to fsync() after a write */
 GHashTable *children;
 char pidfname[256]; /**< name of our PID file */
 char pidftemplate[256]; /**< template to be used for the filename of the PID file */
@@ -173,64 +157,12 @@ int modernsock=0;	  /**< Socket for the modern handler. Not used
 char* modern_listen;	  /**< listenaddr value for modernsock */
 
 /**
- * Types of virtuatlization
- **/
-typedef enum {
-	VIRT_NONE=0,	/**< No virtualization */
-	VIRT_IPLIT,	/**< Literal IP address as part of the filename */
-	VIRT_IPHASH,	/**< Replacing all dots in an ip address by a / before
-			     doing the same as in IPLIT */
-	VIRT_CIDR,	/**< Every subnet in its own directory */
-} VIRT_STYLE;
-
-/**
- * Variables associated with a server.
- **/
-typedef struct {
-	gchar* exportname;    /**< (unprocessed) filename of the file we're exporting */
-	off_t expected_size; /**< size of the exported file as it was told to
-			       us through configuration */
-	gchar* listenaddr;   /**< The IP address we're listening on */
-	unsigned int port;   /**< port we're exporting this file at */
-	char* authname;      /**< filename of the authorization file */
-	int flags;           /**< flags associated with this exported file */
-	int socket;	     /**< The socket of this server. */
-	int socket_family;   /**< family of the socket */
-	VIRT_STYLE virtstyle;/**< The style of virtualization, if any */
-	uint8_t cidrlen;     /**< The length of the mask when we use
-				  CIDR-style virtualization */
-	gchar* prerun;	     /**< command to be ran after connecting a client,
-				  but before starting to serve */
-	gchar* postrun;	     /**< command that will be ran after the client
-				  disconnects */
-	gchar* servename;    /**< name of the export as selected by nbd-client */
-} SERVER;
-
-/**
  * Variables associated with a client socket.
  **/
 typedef struct {
 	int fhandle;      /**< file descriptor */
 	off_t startoff;   /**< starting offset of this file */
 } FILE_INFO;
-
-typedef struct {
-	off_t exportsize;    /**< size of the file we're exporting */
-	char *clientname;    /**< peer */
-	char *exportname;    /**< (processed) filename of the file we're exporting */
-	GArray *export;    /**< array of FILE_INFO of exported files;
-			       array size is always 1 unless we're
-			       doing the multiple file option */
-	int net;	     /**< The actual client socket */
-	SERVER *server;	     /**< The server this client is getting data from */
-	char* difffilename;  /**< filename of the copy-on-write file, if any */
-	int difffile;	     /**< filedescriptor of copyonwrite file. @todo
-			       shouldn't this be an array too? (cfr export) Or
-			       make -m and -c mutually exclusive */
-	u32 difffilelen;     /**< number of pages in difffile */
-	u32 *difmap;	     /**< see comment on the global difmap for this one */
-	gboolean modern;     /**< client was negotiated using modern negotiation protocol */
-} CLIENT;
 
 /**
  * Type of configuration file values
@@ -310,46 +242,6 @@ int authorized_client(CLIENT *opts) {
 	}
 	fclose(f);
 	return 0;
-}
-
-/**
- * Read data from a file descriptor into a buffer
- *
- * @param f a file descriptor
- * @param buf a buffer
- * @param len the number of bytes to be read
- **/
-inline void readit(int f, void *buf, size_t len) {
-	ssize_t res;
-	while (len > 0) {
-		DEBUG("*");
-		if ((res = read(f, buf, len)) <= 0) {
-			if(errno != EAGAIN) {
-				err("Read failed: %m");
-			}
-		} else {
-			len -= res;
-			buf += res;
-		}
-	}
-}
-
-/**
- * Write data from a buffer into a filedescriptor
- *
- * @param f a file descriptor
- * @param buf a buffer containing data
- * @param len the number of bytes to be written
- **/
-inline void writeit(int f, void *buf, size_t len) {
-	ssize_t res;
-	while (len > 0) {
-		DEBUG("+");
-		if ((res = write(f, buf, len)) <= 0)
-			err("Send failed: %m");
-		len -= res;
-		buf += res;
-	}
 }
 
 /**
@@ -1223,116 +1115,6 @@ int expwrite(off_t a, char *buf, size_t len, CLIENT *client) {
 }
 
 /**
- * Do the initial negotiation.
- *
- * @param client The client we're negotiating with.
- **/
-CLIENT* negotiate(int net, CLIENT *client, GArray* servers) {
-	char zeros[128];
-	uint64_t size_host;
-	uint32_t flags = NBD_FLAG_HAS_FLAGS;
-	uint16_t smallflags = 0;
-	uint64_t magic;
-
-	memset(zeros, '\0', sizeof(zeros));
-	if(!client || !client->modern) {
-		/* common */
-		if (write(net, INIT_PASSWD, 8) < 0) {
-			err_nonfatal("Negotiation failed: %m");
-			if(client)
-				exit(EXIT_FAILURE);
-		}
-		if(!client || client->modern) {
-			/* modern */
-			magic = htonll(opts_magic);
-		} else {
-			/* oldstyle */
-			magic = htonll(cliserv_magic);
-		}
-		if (write(net, &magic, sizeof(magic)) < 0) {
-			err_nonfatal("Negotiation failed: %m");
-			if(client)
-				exit(EXIT_FAILURE);
-		}
-	}
-	if(!client) {
-		/* modern */
-		uint32_t reserved;
-		uint32_t opt;
-		uint32_t namelen;
-		char* name;
-		int i;
-
-		if(!servers)
-			err("programmer error");
-		if (write(net, &smallflags, sizeof(uint16_t)) < 0)
-			err("Negotiation failed: %m");
-		if (read(net, &reserved, sizeof(reserved)) < 0)
-			err("Negotiation failed: %m");
-		if (read(net, &magic, sizeof(magic)) < 0)
-			err("Negotiation failed: %m");
-		magic = ntohll(magic);
-		if(magic != opts_magic) {
-			close(net);
-			return NULL;
-		}
-		if (read(net, &opt, sizeof(opt)) < 0)
-			err("Negotiation failed: %m");
-		opt = ntohl(opt);
-		if(opt != NBD_OPT_EXPORT_NAME) {
-			close(net);
-			return NULL;
-		}
-		if (read(net, &namelen, sizeof(namelen)) < 0)
-			err("Negotiation failed: %m");
-		namelen = ntohl(namelen);
-		name = malloc(namelen+1);
-		name[namelen]=0;
-		if (read(net, name, namelen) < 0)
-			err("Negotiation failed: %m");
-		for(i=0; i<servers->len; i++) {
-			SERVER* serve = &(g_array_index(servers, SERVER, i));
-			if(!strcmp(serve->servename, name)) {
-				CLIENT* client = g_new0(CLIENT, 1);
-				client->server = serve;
-				client->exportsize = OFFT_MAX;
-				client->net = net;
-				client->modern = TRUE;
-				return client;
-			}
-		}
-		return NULL;
-	}
-	/* common */
-	size_host = htonll((u64)(client->exportsize));
-	if (write(net, &size_host, 8) < 0)
-		err("Negotiation failed: %m");
-	if (client->server->flags & F_READONLY)
-		flags |= NBD_FLAG_READ_ONLY;
-	if (!client->modern) {
-		/* oldstyle */
-		flags = htonl(flags);
-		if (write(client->net, &flags, 4) < 0)
-			err("Negotiation failed: %m");
-	} else {
-		/* modern */
-		smallflags = (uint16_t)(flags & ~((uint16_t)0));
-		smallflags = htons(smallflags);
-		if (write(client->net, &smallflags, sizeof(smallflags)) < 0) {
-			err("Negotiation failed: %m");
-		}
-	}
-	/* common */
-	if (write(client->net, zeros, 124) < 0)
-		err("Negotiation failed: %m");
-	return NULL;
-}
-
-/** sending macro. */
-#define SEND(net,reply) writeit( net, &reply, sizeof( reply ));
-/** error macro. */
-#define ERROR(client,reply,errcode) { reply.error = htonl(errcode); SEND(client->net,reply); reply.error = 0; }
-/**
  * Serve a file to a single client.
  *
  * @todo This beast needs to be split up in many tiny little manageable
@@ -1342,28 +1124,33 @@ CLIENT* negotiate(int net, CLIENT *client, GArray* servers) {
  * @return when the client disconnects
  **/
 int mainloop(CLIENT *client) {
-	struct nbd_request request;
-	struct nbd_reply reply;
 	gboolean go_on=TRUE;
-#ifdef DODBG
-	int i = 0;
-#endif
-	negotiate(client->net, client, NULL);
+	int ret;
+	uint32_t flags = NBD_FLAG_HAS_FLAGS;
+
+	if (client->server->flags & F_READONLY)
+		flags |= NBD_FLAG_READ_ONLY;
+	if (client->modern) {
+		ret= nbd_server_negotiate_info_new_style(client->net,
+							 client->exportsize,
+							 flags);
+	} else {
+		ret = nbd_server_negotiate_info_old_style(client->net,
+							  client->exportsize,
+							  flags);
+	}
+	if (ret < 0) {
+		err("Negotiation failed: %m");
+	}
 	DEBUG("Entering request loop!\n");
-	reply.magic = htonl(NBD_REPLY_MAGIC);
-	reply.error = 0;
 	while (go_on) {
 		char buf[BUFSIZE];
-		size_t len;
-#ifdef DODBG
-		i++;
-		printf("%d: ", i);
-#endif
-		readit(client->net, &request, sizeof(request));
-		request.from = ntohll(request.from);
-		request.type = ntohl(request.type);
 
-		if (request.type==NBD_CMD_DISC) {
+		ret = nbd_server_loop(client, buf, BUFSIZE);
+		if (ret < 0) {
+			err("NBD server loop failed !");
+		}
+		if (ret == 1) {
 			msg2(LOG_INFO, "Disconnect request received.");
                 	if (client->server->flags & F_COPYONWRITE) { 
 				if (client->difmap) g_free(client->difmap) ;
@@ -1374,63 +1161,6 @@ int mainloop(CLIENT *client) {
 			go_on=FALSE;
 			continue;
 		}
-
-		len = ntohl(request.len);
-
-		if (request.magic != htonl(NBD_REQUEST_MAGIC))
-			err("Not enough magic.");
-		if (len > BUFSIZE + sizeof(struct nbd_reply))
-			err("Request too big!");
-#ifdef DODBG
-		printf("%s from %llu (%llu) len %d, ", request.type ? "WRITE" :
-				"READ", (unsigned long long)request.from,
-				(unsigned long long)request.from / 512, len);
-#endif
-		memcpy(reply.handle, request.handle, sizeof(reply.handle));
-		if ((request.from + len) > (OFFT_MAX)) {
-			DEBUG("[Number too large!]");
-			ERROR(client, reply, EINVAL);
-			continue;
-		}
-
-		if (((ssize_t)((off_t)request.from + len) > client->exportsize)) {
-			DEBUG("[RANGE!]");
-			ERROR(client, reply, EINVAL);
-			continue;
-		}
-
-		if (request.type==NBD_CMD_WRITE) {
-			DEBUG("wr: net->buf, ");
-			readit(client->net, buf, len);
-			DEBUG("buf->exp, ");
-			if ((client->server->flags & F_READONLY) ||
-			    (client->server->flags & F_AUTOREADONLY)) {
-				DEBUG("[WRITE to READONLY!]");
-				ERROR(client, reply, EPERM);
-				continue;
-			}
-			if (expwrite(request.from, buf, len, client)) {
-				DEBUG("Write failed: %m" );
-				ERROR(client, reply, errno);
-				continue;
-			}
-			SEND(client->net, reply);
-			DEBUG("OK!\n");
-			continue;
-		}
-		/* READ */
-
-		DEBUG("exp->buf, ");
-		if (expread(request.from, buf + sizeof(struct nbd_reply), len, client)) {
-			DEBUG("Read failed: %m");
-			ERROR(client, reply, errno);
-			continue;
-		}
-
-		DEBUG("buf->net, ");
-		memcpy(buf, &reply, sizeof(struct nbd_reply));
-		writeit(client->net, buf, len + sizeof(struct nbd_reply));
-		DEBUG("OK!\n");
 	}
 	return 0;
 }
@@ -1588,9 +1318,6 @@ void serveconnection(CLIENT *client) {
  **/
 void set_peername(int net, CLIENT *client) {
 	struct sockaddr_storage addrin;
-	struct sockaddr_storage netaddr;
-	struct sockaddr_in  *netaddr4 = NULL;
-	struct sockaddr_in6 *netaddr6 = NULL;
 	size_t addrinlen = sizeof( addrin );
 	struct addrinfo hints;
 	struct addrinfo *ai = NULL;
@@ -1631,29 +1358,30 @@ void set_peername(int net, CLIENT *client) {
 			client->exportname=g_strdup_printf(client->server->exportname, peername);
 			break;
 		case VIRT_CIDR:
-			memcpy(&netaddr, &addrin, addrinlen);
 			if(ai->ai_family == AF_INET) {
-				netaddr4 = (struct sockaddr_in *)&netaddr;
-				(netaddr4->sin_addr).s_addr>>=32-(client->server->cidrlen);
-				(netaddr4->sin_addr).s_addr<<=32-(client->server->cidrlen);
+				struct sockaddr_in netaddr4;
+				memcpy(&netaddr4, &addrin, addrinlen);
+				netaddr4.sin_addr.s_addr>>=32-(client->server->cidrlen);
+				netaddr4.sin_addr.s_addr<<=32-(client->server->cidrlen);
 
-				getnameinfo((struct sockaddr *) netaddr4, (socklen_t) addrinlen,
+				getnameinfo((struct sockaddr *) &netaddr4, (socklen_t) addrinlen,
 							netname, sizeof (netname), NULL, 0, NI_NUMERICHOST);
 				tmp=g_strdup_printf("%s/%s", netname, peername);
 			}else if(ai->ai_family == AF_INET6) {
-				netaddr6 = (struct sockaddr_in6 *)&netaddr;
+				struct sockaddr_in6 netaddr6;
+				memcpy(&netaddr6, &addrin, addrinlen);
 
 				shift = 128-(client->server->cidrlen);
 				i = 3;
 				while(shift >= 32) {
-					((netaddr6->sin6_addr).s6_addr32[i])=0;
+					((netaddr6.sin6_addr).s6_addr32[i])=0;
 					shift-=32;
 					i--;
 				}
-				(netaddr6->sin6_addr).s6_addr32[i]>>=shift;
-				(netaddr6->sin6_addr).s6_addr32[i]<<=shift;
+				(netaddr6.sin6_addr).s6_addr32[i]>>=shift;
+				(netaddr6.sin6_addr).s6_addr32[i]<<=shift;
 
-				getnameinfo((struct sockaddr *)netaddr6, (socklen_t)addrinlen,
+				getnameinfo((struct sockaddr *)&netaddr6, (socklen_t)addrinlen,
 					    netname, sizeof(netname), NULL, 0, NI_NUMERICHOST);
 				tmp=g_strdup_printf("%s/%s", netname, peername);
 			}
@@ -1717,12 +1445,25 @@ int serveloop(GArray* servers) {
 		if(select(max+1, &rset, NULL, NULL, NULL)>0) {
 			int net = 0;
 			SERVER* serve;
+			char *name;
 
 			DEBUG("accept, ");
 			if(FD_ISSET(modernsock, &rset)) {
 				if((net=accept(modernsock, (struct sockaddr *) &addrin, &addrinlen)) < 0)
 					err("accept: %m");
-				client = negotiate(net, NULL, servers);
+				name = nbd_server_negotiate_new_style(net);
+				client = NULL;
+				for(i=0; i<servers->len; i++) {
+					SERVER* serve = &(g_array_index(servers, SERVER, i));
+					if(!strcmp(serve->servename, name)) {
+						CLIENT* client = g_new0(CLIENT, 1);
+						client->server = serve;
+						client->exportsize = OFFT_MAX;
+						client->net = net;
+						client->modern = TRUE;
+						break;
+					}
+				}
 				if(!client) {
 					err_nonfatal("negotiation failed");
 					close(net);
@@ -2097,6 +1838,7 @@ int main(int argc, char *argv[]) {
 			client->net=0;
 			client->exportsize=OFFT_MAX;
 			set_peername(0,client);
+			nbd_server_negotiate_old_style(client->net);
 			serveconnection(client);
 			return 0;
 		}

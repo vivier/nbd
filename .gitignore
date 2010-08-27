@@ -6,8 +6,6 @@ config.h
 *~
 config.*
 file
-nbd-client.8
-nbd-server.1
 stamp-h.in
 stamp-h1
 Doxyfile
@@ -20,11 +18,7 @@ nbd-client
 nbd-server
 doc
 nbd-server.config
-nbd-server.5
 *.o
-nbd-client.8.in
-nbd-server.1.in
-nbd-server.5.in
 Makefile.in
 config.h.in
 aclocal.m4
@@ -32,3 +26,12 @@ INSTALL
 depcomp
 install-sh
 configure
+.*.swp
+*.a
+man/nbd-client.8
+man/nbd-server.1
+man/nbd-server.5
+man/nbd-client.8.sgml
+man/nbd-server.1.sgml
+man/nbd-server.5.sgml
+cscope.out

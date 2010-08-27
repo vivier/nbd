@@ -83,6 +83,7 @@ AC_ARG_ENABLE(
 )
 
 AC_PROG_CC
+AC_PROG_RANLIB
 AC_PROG_CPP
 AC_PROG_INSTALL
 AC_CANONICAL_HOST
@@ -120,6 +121,6 @@ AC_TYPE_PID_T
 nbd_server_CPPFLAGS=$nbd_server_CPPFLAGS" -DSYSCONFDIR='\"$sysconfdir\"'"
 AC_SUBST(nbd_server_CPPFLAGS)
 AC_CONFIG_HEADERS([config.h])
-AC_CONFIG_FILES([Makefile Doxyfile man/Makefile man/nbd-client.8 man/nbd-server.5 man/nbd-server.1])
+AC_CONFIG_FILES([Makefile Doxyfile man/Makefile man/nbd-client.8 man/nbd-server.5 man/nbd-server.1 lib/Makefile])
 AC_OUTPUT
 

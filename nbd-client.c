@@ -20,10 +20,10 @@
 #include "config.h"
 #include "lfs.h"
 
-#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <netinet/tcp.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -36,10 +36,11 @@
 #include <errno.h>
 #include <getopt.h>
 #include <stdarg.h>
+#include <glib.h>
 
-#include <linux/ioctl.h>
+#include "libnbd.h"
+#include "nbd-log.h"
 #define MY_NAME "nbd_client"
-#include "cliserv.h"
 
 #ifdef WITH_SDP
 #include <sdp_inet.h>
@@ -123,145 +124,6 @@ int opennet(char *name, char* portstr, int sdp) {
 	return sock;
 }
 
-void negotiate(int sock, u64 *rsize64, u32 *flags, char* name) {
-	u64 magic, size64;
-	uint16_t tmp;
-	char buf[256] = "\0\0\0\0\0\0\0\0\0";
-
-	printf("Negotiation: ");
-	if (read(sock, buf, 8) < 0)
-		err("Failed/1: %m");
-	if (strlen(buf)==0)
-		err("Server closed connection");
-	if (strcmp(buf, INIT_PASSWD))
-		err("INIT_PASSWD bad");
-	printf(".");
-	if (read(sock, &magic, sizeof(magic)) < 0)
-		err("Failed/2: %m");
-	magic = ntohll(magic);
-	if(name) {
-		uint32_t opt;
-		uint32_t namesize;
-		uint32_t reserved = 0;
-
-		if (magic != opts_magic)
-			err("Not enough opts_magic");
-		printf(".");
-		if(read(sock, &tmp, sizeof(uint16_t)) < 0) {
-			err("Failed reading flags: %m");
-		}
-		*flags = ((u32)ntohs(tmp)) << 16;
-
-		/* reserved for future use*/
-		if (write(sock, &reserved, sizeof(reserved)) < 0)
-			err("Failed/2.1: %m");
-
-		/* Write the export name that we're after */
-		magic = ntohll(opts_magic);
-		if (write(sock, &magic, sizeof(magic)) < 0)
-			err("Failed/2.2: %m");
-		opt = ntohl(NBD_OPT_EXPORT_NAME);
-		if (write(sock, &opt, sizeof(opt)) < 0)
-			err("Failed/2.3: %m");
-		namesize = (u32)strlen(name);
-		namesize = ntohl(namesize);
-		if (write(sock, &namesize, sizeof(namesize)) < 0)
-			err("Failed/2.4: %m");
-		if (write(sock, name, strlen(name)) < 0)
-			err("Failed/2.4: %m");
-	} else {
-		if (magic != cliserv_magic)
-			err("Not enough cliserv_magic");
-		printf(".");
-	}
-
-	if (read(sock, &size64, sizeof(size64)) < 0)
-		err("Failed/3: %m\n");
-	size64 = ntohll(size64);
-
-#ifdef NBD_SET_SIZE_BLOCKS
-	if ((size64>>10) > (~0UL >> 1)) {
-		printf("size = %luMB", (unsigned long)(size64>>20));
-		err("Exported device is too big for me. Get 64-bit machine :-(\n");
-	} else
-		printf("size = %luKB", (unsigned long)(size64>>10));
-#else
-	if (size64 > (~0UL >> 1)) {
-		printf("size = %luKB", (unsigned long)(size64>>10));
-		err("Exported device is too big. Get 64-bit machine or newer kernel :-(\n");
-	} else
-		printf("size = %lu", (unsigned long)(size64));
-#endif
-
-	if(!name) {
-		if (read(sock, flags, sizeof(*flags)) < 0)
-			err("Failed/4: %m\n");
-		*flags = ntohl(*flags);
-	} else {
-		if(read(sock, &tmp, sizeof(tmp)) < 0)
-			err("Failed/4: %m\n");
-		*flags |= (uint32_t)ntohs(tmp);
-	}
-
-	if (read(sock, &buf, 124) < 0)
-		err("Failed/5: %m\n");
-	printf("\n");
-
-	*rsize64 = size64;
-}
-
-void setsizes(int nbd, u64 size64, int blocksize, u32 flags) {
-	unsigned long size;
-	int read_only = (flags & NBD_FLAG_READ_ONLY) ? 1 : 0;
-
-#ifdef NBD_SET_SIZE_BLOCKS
-	if (size64/blocksize > (~0UL >> 1))
-		err("Device too large.\n");
-	else {
-		int er;
-		if (ioctl(nbd, NBD_SET_BLKSIZE, (unsigned long)blocksize) < 0)
-			err("Ioctl/1.1a failed: %m\n");
-		size = (unsigned long)(size64/blocksize);
-		if ((er = ioctl(nbd, NBD_SET_SIZE_BLOCKS, size)) < 0)
-			err("Ioctl/1.1b failed: %m\n");
-		fprintf(stderr, "bs=%d, sz=%lu\n", blocksize, size);
-	}
-#else
-	if (size64 > (~0UL >> 1)) {
-		err("Device too large.\n");
-	} else {
-		size = (unsigned long)size64;
-		if (ioctl(nbd, NBD_SET_SIZE, size) < 0)
-			err("Ioctl NBD_SET_SIZE failed: %m\n");
-	}
-#endif
-
-	ioctl(nbd, NBD_CLEAR_SOCK);
-
-	if (ioctl(nbd, BLKROSET, (unsigned long) &read_only) < 0)
-		err("Unable to set read-only attribute for device");
-}
-
-void set_timeout(int nbd, int timeout) {
-	if (timeout) {
-#ifdef NBD_SET_TIMEOUT
-		if (ioctl(nbd, NBD_SET_TIMEOUT, (unsigned long)timeout) < 0)
-			err("Ioctl NBD_SET_TIMEOUT failed: %m\n");
-		fprintf(stderr, "timeout=%d\n", timeout);
-#else
-		err("Ioctl NBD_SET_TIMEOUT cannot be called when compiled on a system that does not support it\n");
-#endif
-	}
-}
-
-void finish_sock(int sock, int nbd, int swap) {
-	if (ioctl(nbd, NBD_SET_SOCK, sock) < 0)
-		err("Ioctl NBD_SET_SOCK failed: %m\n");
-
-	if (swap)
-		mlockall(MCL_CURRENT | MCL_FUTURE);
-}
-
 void usage(char* errmsg, ...) {
 	if(errmsg) {
 		char tmp[256];
@@ -281,28 +143,6 @@ void usage(char* errmsg, ...) {
 	fprintf(stderr, "Allowed values for blocksize are 512,1024,2048,4096\n"); /* will be checked in kernel :) */
 	fprintf(stderr, "Note, that kernel 2.4.2 and older ones do not work correctly with\n");
 	fprintf(stderr, "blocksizes other than 1024 without patches\n");
-}
-
-void disconnect(char* device) {
-	int nbd = open(device, O_RDWR);
-
-	if (nbd < 0)
-		err("Cannot open NBD: %m\nPlease ensure the 'nbd' module is loaded.");
-	printf("Disconnecting: que, ");
-	if (ioctl(nbd, NBD_CLEAR_QUE)< 0)
-		err("Ioctl failed: %m\n");
-	printf("disconnect, ");
-#ifdef NBD_DISCONNECT
-	if (ioctl(nbd, NBD_DISCONNECT)<0)
-		err("Ioctl failed: %m\n");
-	printf("sock, ");
-#else
-	fprintf(stderr, "Can't disconnect: I was not compiled with disconnect support!\n" );
-	exit(1);
-#endif
-	if (ioctl(nbd, NBD_CLEAR_SOCK)<0)
-		err("Ioctl failed: %m\n");
-	printf("done\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -391,7 +231,8 @@ int main(int argc, char *argv[]) {
 		case 'c':
 			return check_conn(optarg, 1);
 		case 'd':
-			disconnect(optarg);
+			if (nbd_client_disconnect(optarg) < 0)
+				exit(EXIT_FAILURE);
 			exit(EXIT_SUCCESS);
 		case 'h':
 			usage(NULL);
@@ -438,10 +279,10 @@ int main(int argc, char *argv[]) {
 
 	sock = opennet(hostname, port, sdp);
 
-	negotiate(sock, &size64, &flags, name);
-	setsizes(nbd, size64, blocksize, flags);
-	set_timeout(nbd, timeout);
-	finish_sock(sock, nbd, swap);
+	nbd_client_negotiate(sock, &size64, &flags, name);
+	nbd_client_setsizes(nbd, size64, blocksize, flags);
+	nbd_client_set_timeout(nbd, timeout);
+	nbd_client_finish_sock(sock, nbd, swap);
 
 	/* Go daemon */
 	
@@ -473,7 +314,7 @@ int main(int argc, char *argv[]) {
 		}
 #endif
 
-		if (ioctl(nbd, NBD_DO_IT) < 0) {
+		if (nbd_client_do(nbd) < 0) {
 			fprintf(stderr, "Kernel call returned: %m");
 			if(errno==EBADR) {
 				/* The user probably did 'nbd-client -d' on us.
@@ -488,15 +329,15 @@ int main(int argc, char *argv[]) {
 					close(sock); close(nbd);
 					sock = opennet(hostname, port, sdp);
 					nbd = open(nbddev, O_RDWR);
-					negotiate(sock, &new_size, &new_flags, name);
+					nbd_client_negotiate(sock, &new_size, &new_flags, name);
 					if (size64 != new_size) {
 						err("Size of the device changed. Bye");
 					}
-					setsizes(nbd, size64, blocksize,
+					nbd_client_setsizes(nbd, size64, blocksize,
 								new_flags);
 
-					set_timeout(nbd, timeout);
-					finish_sock(sock,nbd,swap);
+					nbd_client_set_timeout(nbd, timeout);
+					nbd_client_finish_sock(sock,nbd,swap);
 				}
 			}
 		} else {
@@ -507,10 +348,6 @@ int main(int argc, char *argv[]) {
 			cont=0;
 		}
 	} while(cont);
-	printf("Closing: que, ");
-	ioctl(nbd, NBD_CLEAR_QUE);
-	printf("sock, ");
-	ioctl(nbd, NBD_CLEAR_SOCK);
-	printf("done\n");
+	nbd_client_clear(nbd);
 	return 0;
 }
